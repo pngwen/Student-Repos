@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+PROG=$(basename "$0")
+
+usage() {
+    cat <<EOF
+Usage: $PROG <repo> <studentlist.tsv>
+
+Fork a GitHub repository for each student in a TSV file.
+
+Arguments:
+  repo             Source repository in OWNER/REPO format (e.g., utm-lowe/cs325-work)
+  studentlist.tsv  Tab-separated file: column 1 = GitHub username, column 2 = course tag
+
+For each student, this script will:
+  1. Fork OWNER/REPO to OWNER/REPO-TAG in the same organization
+  2. Add the student as a collaborator with write access
+
+Requirements:
+  gh CLI must be installed and authenticated with sufficient org permissions.
+
+Example:
+  $PROG utm-lowe/cs325-work students.tsv
+EOF
+}
+
+if [[ $# -ne 2 ]]; then
+    usage >&2
+    exit 1
+fi
+
+REPO="$1"
+STUDENT_FILE="$2"
+
+if [[ ! "$REPO" =~ ^[^/]+/[^/]+$ ]]; then
+    echo "$PROG: error: repo must be in OWNER/REPO format, got: $REPO" >&2
+    exit 1
+fi
+
+if [[ ! -f "$STUDENT_FILE" ]]; then
+    echo "$PROG: error: student file not found: $STUDENT_FILE" >&2
+    exit 1
+fi
+
+ORG="${REPO%%/*}"
+REPO_NAME="${REPO##*/}"
+
+while IFS=$'\t' read -r username tag _rest; do
+    [[ -z "$username" || -z "$tag" ]] && continue
+
+    FORK_NAME="${REPO_NAME}-${tag}"
+    FORK_REPO="${ORG}/${FORK_NAME}"
+
+    echo "[$username] Forking $REPO -> $FORK_REPO"
+    if ! gh repo fork "$REPO" --org "$ORG" --fork-name "$FORK_NAME" 2>&1; then
+        echo "[$username] Warning: fork failed, skipping collaborator step" >&2
+        continue
+    fi
+
+    echo "[$username] Adding as collaborator with write access to $FORK_REPO"
+    if ! gh api "repos/$FORK_REPO/collaborators/$username" --method PUT -f permission=push --silent; then
+        echo "[$username] Warning: failed to add collaborator" >&2
+        continue
+    fi
+
+    echo "[$username] Done."
+done < "$STUDENT_FILE"
+
+echo "All students processed."
